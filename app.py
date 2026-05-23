@@ -50,7 +50,7 @@ st.markdown(description, unsafe_allow_html=True)
 # ----------------------------------------------------
 @st.cache_resource
 def load_detector_infrastructure():
-    model_save_path = "mrdbourke/rt_detrv2_finetuned_trashify_box_detector_v1"
+    model_save_path = "RahulKate-173/rt_detrv2_finetuned_trashify_box_detector_v1"
     
     # Force 640x640 size adjustment patch to clear tensor division runtime crash
     image_processor = AutoImageProcessor.from_pretrained(model_save_path)
