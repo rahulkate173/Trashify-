@@ -1,283 +1,208 @@
-"""
-🚮 Trashify Object Detection — Streamlit App
-Loads RT-DETRv2 fine-tuned model and runs inference on uploaded images.
-"""
-
-import streamlit as st
 import torch
+import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
-# ─────────────────────────────────────────────
-# Page config
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="Trashify Object Detector",
-    page_icon="🚮",
-    layout="wide",
-)
+# ----------------------------------------------------
+# 1. Page Layout & Pure Black Theme Injection
+# ----------------------------------------------------
+st.set_page_config(layout="wide", page_title="Trashify Demo")
 
-# ─────────────────────────────────────────────
-# Custom CSS for a premium dark look
-# ─────────────────────────────────────────────
 st.markdown("""
-<style>
-    /* ── Global ── */
-    .stApp {
-        background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
-        color: #e0e0e0;
-    }
-
-    /* ── Header banner ── */
-    .hero-banner {
-        text-align: center;
-        padding: 2.5rem 1rem 1.5rem;
-    }
-    .hero-banner h1 {
-        font-size: 2.8rem;
-        background: linear-gradient(90deg, #00c9ff, #92fe9d);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        margin-bottom: 0.3rem;
-    }
-    .hero-banner p {
-        color: #b0b0b0;
-        font-size: 1.05rem;
-        max-width: 700px;
-        margin: 0 auto;
-    }
-
-    /* ── Cards ── */
-    .glass-card {
-        background: rgba(255,255,255,0.06);
-        border: 1px solid rgba(255,255,255,0.12);
-        border-radius: 16px;
-        padding: 1.5rem;
-        backdrop-filter: blur(12px);
-        margin-bottom: 1rem;
-    }
-
-    /* ── Result banner ── */
-    .result-banner {
-        padding: 1rem 1.5rem;
-        border-radius: 12px;
-        font-size: 1rem;
-        line-height: 1.5;
-        margin-top: 1rem;
-    }
-    .result-success {
-        background: rgba(0,200,83,0.15);
-        border: 1px solid rgba(0,200,83,0.4);
-        color: #a5d6a7;
-    }
-    .result-warning {
-        background: rgba(255,193,7,0.15);
-        border: 1px solid rgba(255,193,7,0.4);
-        color: #ffe082;
-    }
-    .result-info {
-        background: rgba(33,150,243,0.15);
-        border: 1px solid rgba(33,150,243,0.4);
-        color: #90caf9;
-    }
-
-    /* ── Sidebar ── */
-    section[data-testid="stSidebar"] {
-        background: rgba(15, 12, 41, 0.95);
-        border-right: 1px solid rgba(255,255,255,0.08);
-    }
-
-    /* ── Hide default Streamlit branding ── */
-    #MainMenu, footer, header {visibility: hidden;}
-</style>
+    <style>
+        /* Force pure black background canvas */
+        .stApp {
+            background-color: #000000;
+            color: #ffffff;
+        }
+        /* Lock UI text blocks, sliders, and headings to white text */
+        h1, h2, h3, p, label, .stSlider {
+            color: #ffffff !important;
+        }
+        /* Styled File upload block container */
+        section[data-testid="stFileUploader"] {
+            background-color: #0f0f0f;
+            border: 1px dashed #2d2d2d;
+            border-radius: 8px;
+        }
+        /* Custom UI blocks for text output alerts */
+        .stAlert {
+            background-color: #0f0f0f !important;
+            color: #ffffff !important;
+            border: 1px solid #2d2d2d !important;
+        }
+    </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Model loading (cached so it only happens once)
-# ─────────────────────────────────────────────
-MODEL_PATH = "RahulKate-173/rt_detrv2_finetuned_trashify_box_detector_v1"
+st.markdown("<h1 style='text-align: center;'>🚮 Trashify Object Detection Demo V4</h1>", unsafe_allow_html=True)
 
-@st.cache_resource(show_spinner="Loading model… this may take a minute on first run.")
-def load_model():
-    processor = AutoImageProcessor.from_pretrained(MODEL_PATH)
-    model = AutoModelForObjectDetection.from_pretrained(MODEL_PATH)
+description = """
+<div style='text-align: center; color: #cccccc; margin-bottom: 25px;'>
+<p>Help clean up your local area! Upload an image and get +1 if there is all of the following items detected: trash, bin, hand.</p>
+<p>Model is a fine-tuned version of <a href="https://huggingface.co/docs/transformers/main/en/model_doc/rt_detr_v2" target="_blank" style="color: #2979ff;">RT-DETRv2</a> on the <a href="https://huggingface.co/datasets/mrdbourke/trashify_manual_labelled_images" target="_blank" style="color: #2979ff;">Trashify dataset</a>.</p>
+<p style='font-size: 13px; color: #777777;'>This version is v4 because the first three versions were using a different model and did not perform as well.</p>
+</div>
+"""
+st.markdown(description, unsafe_allow_html=True)
+
+# ----------------------------------------------------
+# 2. Cached Resource Pipelines
+# ----------------------------------------------------
+@st.cache_resource
+def load_detector_infrastructure():
+    model_save_path = "mrdbourke/rt_detrv2_finetuned_trashify_box_detector_v1"
+    
+    # Force 640x640 size adjustment patch to clear tensor division runtime crash
+    image_processor = AutoImageProcessor.from_pretrained(model_save_path)
+    image_processor.size = {"height": 640, "width": 640}
+    
+    model = AutoModelForObjectDetection.from_pretrained(model_save_path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device).eval()
-    return processor, model, device
+    model = model.to(device).eval()
+    
+    return image_processor, model, device
 
-image_processor, model, device = load_model()
+image_processor, model, device = load_detector_infrastructure()
 id2label = model.config.id2label
 
-# Colour map for bounding boxes
-COLOR_MAP = {
-    "bin": "#00e676",
-    "trash": "#2979ff",
-    "hand": "#aa00ff",
-    "trash_arm": "#ffd600",
-    "not_trash": "#ff1744",
+# Hex equivalents matching your specified color tokens
+color_dict = {   
+    "bin": "#00e676",       # green
+    "trash": "#2979ff",     # blue
+    "hand": "#aa00ff",      # purple
+    "trash_arm": "#ffd600", # yellow
+    "not_trash": "#ff1744", # red
     "not_bin": "#ff1744",
     "not_hand": "#ff1744",
 }
-def get_image_dimensions_from_pil(image: Image.Image) -> torch.tensor:
-    """
-    Convert the dimensions of a PIL image to a PyTorch tensor in the order (height, width).
 
-    Args:
-        image (Image.Image): The input PIL image.
-
-    Returns:
-        torch.Tensor: A tensor containing the height and width of the image.
-    """
-    # Get (width, height) of image (PIL.Image.size returns width, height)
-    width, height = image.size
-
-    # Convert to a tensor in the order (height, width)
-    image_dimensions_tensor = torch.tensor([height, width])
-
-    return image_dimensions_tensor
-# ─────────────────────────────────────────────
-# Prediction function
-# ─────────────────────────────────────────────
-def predict(image: Image.Image, conf_threshold: float):
+# ----------------------------------------------------
+# 3. Main Operational Pipeline Engine
+# ----------------------------------------------------
+def predict_on_image(image, conf_threshold):
+    model.eval()
+    
+    # Calculate box coordinates mapping against the actual original image scales
+    target_sizes = torch.tensor([[image.size[1], image.size[0]]]).to(device)
+    
     with torch.no_grad():
-        # do_pad=False prevents the processor from padding to a square,
-        # which would skew the normalized box coordinates vs. the original image dims.
-        inputs = image_processor(images=[image], return_tensors="pt", do_pad=False)
-        outputs = model(**inputs.to(device))
-
-        # target_sizes is (batch, 2) as (height, width)
-        # target_sizes = torch.tensor([image.size[1], image.size[0]], device=device).unsqueeze(0)
-        target_sizes = get_image_dimensions_from_pil(image=image).unsqueeze(0)
+        inputs = image_processor(images=[image], return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        model_outputs = model(**inputs)
+        
         results = image_processor.post_process_object_detection(
-            outputs, threshold=conf_threshold, target_sizes=target_sizes
+            model_outputs,
+            threshold=conf_threshold,
+            target_sizes=target_sizes
         )[0]
 
-    # Move everything to CPU
-    for k, v in results.items():
-        try:
-            results[k] = v.item().cpu()
-        except Exception:
-            results[k] = v.cpu()
+    # Safely unpack tensor results down to execution lists
+    boxes = results["boxes"].cpu().tolist()
+    scores = results["scores"].cpu().tolist()
+    labels = results["labels"].cpu().tolist()
 
-    # Draw boxes on a copy of the image
-    annotated = image.copy()
-    draw = ImageDraw.Draw(annotated)
+    # Create editable image duplicate
+    annotated_image = image.copy()
+    draw = ImageDraw.Draw(annotated_image)
+    
     try:
         font = ImageFont.load_default(size=20)
-    except TypeError:
+    except:
         font = ImageFont.load_default()
 
-    detected_labels = []
+    detected_class_name_text_labels = []
 
-    for box, score, label in zip(results["boxes"], results["scores"], results["labels"]):
-        x1, y1, x2, y2 = box.tolist()
-        label_name = id2label[label.item()]
-        color = COLOR_MAP.get(label_name, "#ffffff")
-        detected_labels.append(label_name)
+    for box, score, label in zip(boxes, scores, labels):
+        label_name = id2label[label]
+        targ_color = color_dict.get(label_name, "#ff1744")
+        detected_class_name_text_labels.append(label_name)
 
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
-        text = f"{label_name} ({score.item():.3f})"
-        draw.text((x1, y1), text, fill="white", font=font)
+        # Draw the rectangle bounding tracking window
+        draw.rectangle(xy=box, outline=targ_color, width=3)
+        
+        # Build text description 
+        text_string_to_show = f"{label_name} ({round(score, 3)})"
 
+        # Apply a dark filled background accent capsule underneath the text label for visibility
+        text_w, text_h = draw.textbbox((0, 0), text_string_to_show, font=font)[2:]
+        draw.rectangle([box[0], box[1] - text_h - 4, box[0] + text_w + 6, box[1]], fill=targ_color)
+        draw.text(xy=(box[0] + 3, box[1] - text_h - 2), text=text_string_to_show, fill="black", font=font)
+    
     del draw
 
-    # Build status message
-    target_items = {"trash", "bin", "hand"}
-    detected_set = set(detected_labels)
+    # --- Gamification Evaluation Rule Engine ---
+    target_items = {"trash", "bin", "hand"} 
+    detected_items = set(detected_class_name_text_labels)
 
-    if not detected_set & target_items:
-        status = "info"
-        message = (
-            f"No trash, bin or hand detected at confidence **{conf_threshold}**. "
-            "Try another image or lower the confidence threshold."
+    if not detected_items & target_items:
+        return_string = (
+            f"No trash, bin or hand detected at confidence threshold {conf_threshold}. "
+            "Try another image or lowering the confidence threshold."
         )
-    elif (missing := target_items - detected_set):
-        status = "warning"
-        message = (
-            f"Detected: **{sorted(detected_set & target_items)}**. "
-            f"Missing for +1: **{sorted(missing)}**. "
-            "Try altering the confidence threshold or using a different image."
+        return annotated_image, return_string, "info"
+
+    missing_items = target_items - detected_items
+    if missing_items:
+        return_string = (
+            f"Detected the following items: {sorted(detected_items & target_items)}. But missing the following in order to get +1: {sorted(missing_items)}. \n\n"
+            "If this is an error, try another image or altering the confidence threshold. "
+            "Otherwise, the model may need to be updated with better data."
         )
-    else:
-        status = "success"
-        message = f"🎉 **+1!** Found: **{sorted(detected_set)}** — thank you for cleaning up!"
+        return annotated_image, return_string, "warning"
 
-    return annotated, message, status, len(detected_labels)
+    return_string = f"🎉 +1! Found the following items: {sorted(detected_items)}, thank you for cleaning up the area!"
+    return annotated_image, return_string, "success"
 
+# ----------------------------------------------------
+# 4. Streamlit Interactive Layout Interface
+# ----------------------------------------------------
+col1, col2 = st.columns(2)
 
-# ─────────────────────────────────────────────
-# UI — Hero
-# ─────────────────────────────────────────────
-st.markdown("""
-<div class="hero-banner">
-    <h1>🚮 Trashify Object Detector</h1>
-    <p>Upload a photo and earn <strong>+1</strong> when the model detects <em>trash</em>, a <em>bin</em>, and a <em>hand</em> — all in one frame. Powered by a fine-tuned RT-DETRv2.</p>
-</div>
-""", unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────
-# Sidebar — Settings
-# ─────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### ⚙️ Settings")
-    conf_threshold = st.slider(
-        "Confidence threshold",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.3,
-        step=0.05,
-        help="Only detections above this score will be shown.",
-    )
-
-    st.markdown("---")
-    st.markdown("### 📖 About")
-    st.markdown(
-        "Model: **RT-DETRv2** fine-tuned on the "
-        "[Trashify dataset](https://huggingface.co/datasets/mrdbourke/trashify_manual_labelled_images)."
-    )
-    st.markdown(
-        f"Running on **`{device.upper()}`**"
-    )
-    st.markdown(
-        "Source model: [`RahulKate-173/rt_detrv2_finetuned_trashify_box_detector_v1`]"
-        "(https://huggingface.co/RahulKate-173/rt_detrv2_finetuned_trashify_box_detector_v1)"
-    )
-
-# ─────────────────────────────────────────────
-# Main content
-# ─────────────────────────────────────────────
-col_upload, col_result = st.columns([1, 1], gap="large")
-
-with col_upload:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown("#### 📤 Upload an Image")
-    uploaded_file = st.file_uploader(
-        "Choose a JPEG / PNG image",
-        type=["jpg", "jpeg", "png", "webp"],
-        label_visibility="collapsed",
-    )
-    if uploaded_file:
+with col1:
+    st.subheader("📸 Target Image")
+    uploaded_file = st.file_uploader("Upload Canvas File Link", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+    
+    # Store dynamic target state reference
+    input_image = None
+    if uploaded_file is not None:
         input_image = Image.open(uploaded_file).convert("RGB")
-        st.image(input_image, caption="Original image", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.image(input_image, use_container_width=True)
 
-with col_result:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown("#### 🔍 Detection Results")
+    conf_threshold = st.slider("Confidence Threshold", min_value=0.0, max_value=1.0, value=0.3, step=0.05)
+    submit_btn = st.button("Submit", type="primary", use_container_width=True)
 
-    if uploaded_file:
-        with st.spinner("Running detection…"):
-            annotated_img, message, status, det_count = predict(input_image, conf_threshold)
-
-        st.image(annotated_img, caption=f"{det_count} detection(s)", use_container_width=True)
-
-        css_class = f"result-{status}"
-        st.markdown(
-            f'<div class="result-banner {css_class}">{message}</div>',
-            unsafe_allow_html=True,
-        )
+with col2:
+    st.subheader("🖼️ Image Output")
+    
+    if input_image is not None and submit_btn:
+        # Run standard inference mapping sequence
+        out_img, message, alert_type = predict_on_image(input_image, conf_threshold)
+        
+        st.image(out_img, use_container_width=True)
+        
+        st.subheader("📝 Text Output")
+        if alert_type == "success":
+            st.success(message)
+        elif alert_type == "warning":
+            st.warning(message)
+        else:
+            st.info(message)
     else:
-        st.info("⬅️ Upload an image to get started.")
+        st.info("Upload an image on the left canvas block and press 'Submit' to parse predictions.")
 
-    st.markdown('</div>', unsafe_allow_html=True)
+# ----------------------------------------------------
+# 5. Core Setup App Examples Array Checkpoints
+# ----------------------------------------------------
+st.write("---")
+st.subheader("📋 Examples")
+st.caption("Click on any preset image column configuration target frame below to explore typical predictions.")
+
+ex_col1, ex_col2, ex_col3 = st.columns(3)
+
+# Mocked asset placeholders tracking your Gradio assets architecture layout locally or via remote url
+with ex_col1:
+    st.image("https://images.unsplash.com/photo-1532996122724-e3c354a0b15b?w=400", caption="Example 1 (Threshold: 0.3)")
+with ex_col2:
+    st.image("https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?w=400", caption="Example 2 (Threshold: 0.3)")
+with ex_col3:
+    st.image("https://images.unsplash.com/photo-1516996087931-5ae40242528e?w=400", caption="Example 3 (Threshold: 0.3)")
